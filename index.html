@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+
+<head>
+    <script src="https://code.createjs.com/1.0.0/createjs.min.js"></script>
+    <script src="https://code.createjs.com/1.0.0/tweenjs.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            background-color: black;
+        }
+    </style>
+</head>
+
+<body onload="init();">
+    <canvas id="screen"></canvas>
+</body>
+
+<script>
+    var game_state = 0; // 0 - initial, 1 - playing, 2 - game over
+    var ball_speed;
+    var ball_speed_time = 0;
+    var balls = [];
+    var bricks = [];
+    var bonuses = [];
+    var bullets = [];
+    var angles = [30, 60, 120, 150, 210, 240, 300, 330];
+    var effects = {
+        penetrate: false,
+        shoot: true
+    };
+    var shoot_time = 0;
+    var gameOverTxt, youWinTxt, instructionsTxt;
+
+    var bullet_shape;
+
+    var brick_shapes = {};
+    var bonus_shapes = {};
+    var ball_shape;
+    var ball_touch_points;
+    var bricks_map = {};
+
+    var bat, bat_size, bat_speed, bat_acc = 0;
+    var canvas, stage, w, h, u, dt, grid_size;
+    var deg2rad = Math.PI / 180;
+
+    var pressedKeys = {};
+    window.onkeyup = function (e) { pressedKeys[e.keyCode] = false; }
+    window.onkeydown = function (e) { pressedKeys[e.keyCode] = true; }
+    var keys = { a: 65, d: 68, w: 87, s: 83, space: 32 };
+
+    function init() {
+        canvas = document.getElementById("screen");
+
+        stage = new createjs.Stage(canvas);
+
+        stage.canvas.width = window.innerWidth;
+        stage.canvas.height = window.innerHeight;
+
+        w = stage.canvas.width;
+        h = stage.canvas.height;
+
+        u = w / 40;
+        grid_size = u / 2;
+        bat_size = 4 * u;
+        bat_speed = 2 * u;
+        ball_speed = 4 * u;
+
+        ball_touch_points = createBallTouchPoints();
+
+        // fpsLabel = new createjs.Text("", "bold 18px Arial", "#FFF");
+        // fpsLabel.x = 10;
+        // fpsLabel.y = 20;
+        // stage.addChild(fpsLabel);
+
+        createjs.Ticker.timingMode = createjs.Ticker.RAF;
+        createjs.Ticker.addEventListener("tick", handleTick);
+
+        showInstructions();
+    }
+
+    function initGame() {
+        balls = [];
+        bricks = [];
+        bricks_map = {};
+        bonuses = [];
+        bullets = [];
+        createBat();
+        createBall(w / 2, h - 3 * u + u / 2, null);
+        createBricks();
+        stage.update();
+    }
+
+    function gameOver() {
+        stage.removeAllChildren();
+        stage.update();
+
+        game_state = 2;
+        gameOverTxt = new createjs.Text("GAME OVER!", "bold 60px Arial", "#f00");
+        gameOverTxt.textAlign = "center";
+        gameOverTxt.x = w / 2;
+        gameOverTxt.y = 0;
+        stage.addChild(gameOverTxt);
+        createjs.Tween.get(gameOverTxt).to({ y: h / 2 }, 500).call(() => {
+            showInstructions();
+        });
+    }
+
+    function youWin() {
+        stage.removeAllChildren();
+        stage.update();
+
+        game_state = 2;
+        youWinTxt = new createjs.Text("YOU WIN!", "bold 60px Arial", "#0f0");
+        youWinTxt.textAlign = "center";
+        youWinTxt.x = w / 2;
+        youWinTxt.y = 0;
+        stage.addChild(youWinTxt);
+        createjs.Tween.get(youWinTxt).to({ y: h / 2 }, 500).call(() => {
+            showInstructions();
+        });
+    }
+
+    function showInstructions() {
+        instructionsTxt = new createjs.Text("Press SPACE to start\nTo move the bat use A and D", "bold 24px Arial", "#fff");
+        instructionsTxt.textAlign = "center";
+        instructionsTxt.x = w / 2;
+        instructionsTxt.y = h / 2 + 100;
+
+        stage.addChild(instructionsTxt);
+
+        initGame();
+
+        game_state = 0;
+    }
+
+    function createBat() {
+        bat = new createjs.Shape();
+        bat.graphics.beginFill('yellow').drawRoundRect(-bat_size / 2, 0, bat_size, u, u / 4);
+        bat.x = w / 2;
+        bat.y = h - 2 * u;
+        bat.cache(-bat_size / 2, 0, bat_size, u);
+
+        stage.addChild(bat);
+    }
+
+    function getRandomDir() {
+        var angle = angles[angles.length * Math.random() | 0] * deg2rad;
+        return { x: Math.cos(angle), y: Math.sin(angle) };
+    }
+
+    function createBall(x, y, dir) {
+        var ball = ball_shape;
+        if (ball) {
+            ball = ball_shape.clone();
+        } else {
+            ball_shape = ball = new createjs.Shape();
+            ball.graphics.beginFill('red').drawCircle(0, 0, u / 2);
+            ball.cache(-u / 2, -u / 2, u, u);
+        }
+
+        ball.x = x;
+        ball.y = y;
+        ball.dir = dir;
+
+        balls.push(ball);
+        stage.addChild(ball);
+    }
+
+    function createBrick(c, x, y, color) {
+        var brick = brick_shapes[c];
+        if (brick) {
+            brick = brick.clone();
+        } else {
+            brick_shapes[c] = brick = new createjs.Shape();
+            brick.graphics.beginFill(color).drawRoundRect(-u / 2, -u / 2, u, u, u / 4);
+            brick.cache(-u / 2, -u / 2, u, u);
+        }
+
+        setValue(bricks_map, x / grid_size | 0, y / grid_size | 0, brick);
+
+        brick.x = x;
+        brick.y = y;
+        bricks.push(brick);
+        stage.addChild(brick);
+    }
+
+    function setValue(obj, prop, ...rest) {
+        var leaf = rest.length === 1;
+        var nested = obj[prop] || (leaf ? rest[0] : {});
+        obj[prop] = nested;
+        if (!leaf) setValue(nested, ...rest);
+    }
+
+    function getValue(obj, ...props) {
+        for (var i = 0; i < props.length; i++) {
+            obj = obj[props[i]];
+            if (obj === undefined) break;
+        }
+        return obj;
+    }
+
+    function createBricks() {
+        // 40 chars max per line, 5 lines height top
+        var level = `
+        ----------------------------------------
+        ----------------------------------------
+        --111111111111111111111111111111111111--
+        --222222222222222222222222222222222222--
+        --333333333333333333333333333333333333--
+        --444444444444444444444444444444444444--
+        --555555555555555555555555555555555555--
+        `;
+
+        var y = grid_size;
+        for (var line of level.replace(/ /g, '').split('\n').filter(x => x)) {
+            var x = grid_size;
+            for (var c of line) {
+                if (c != '-') {
+                    switch (c) {
+                        case '1': createBrick(c, x, y, 'green'); break;
+                        case '2': createBrick(c, x, y, 'blue'); break;
+                        case '3': createBrick(c, x, y, 'orange'); break;
+                        case '4': createBrick(c, x, y, 'purple'); break;
+                        case '5': createBrick(c, x, y, 'maroon'); break;
+                    }
+                }
+                x += u;
+            }
+            y += u;
+        }
+    }
+
+    function createBullet() {
+        var bullet = bullet_shape;
+        if (bullet) {
+            bullet = bullet_shape.clone();
+        } else {
+            bullet_shape = bullet = new createjs.Shape();
+            bullet.graphics.beginFill('white').drawRoundRect(0, -u / 2, u / 4, u, u / 4);
+            bullet.cache(0, -u / 2, u, u);
+        }
+
+        bullet.x = bat.x;
+        bullet.y = bat.y;
+        bullet.touch = { x: 0, y: 0 };
+
+        bullets.push(bullet);
+        stage.addChild(bullet);
+
+        createjs.Tween.get(bullet).to({ y: 0 }, 1000).call(() => {
+            bullet.deleted = true;
+            stage.removeChild(bullet);
+        });
+    }
+
+    function handleTick(event) {
+
+        if (game_state === 2) {
+            stage.update();
+            return;
+        }
+
+        var fps = Math.round(createjs.Ticker.getMeasuredFPS());
+        var time = event.time / 1000 | 0;
+        // fpsLabel.text = `${fps} FPS Speed ${ball_speed} Objects ${stage.numChildren}`;
+
+        dt = event.delta / 1000.0;
+        if (game_state === 1) {
+            ball_speed_time += dt;
+            shoot_time += dt;
+        }
+
+        if (ball_speed_time >= 1) {
+            ball_speed_time = 0;
+            ball_speed += 1;
+        }
+
+        if (pressedKeys[keys.a]) {
+            bat_acc -= 1;
+        }
+        if (pressedKeys[keys.d]) {
+            bat_acc += 1;
+        }
+
+        bat_acc = Math.sign(bat_acc) * Math.min(Math.abs(bat_acc), 5);
+
+        if (game_state === 0 && pressedKeys[keys.space]) {
+            game_state = 1;
+            stage.removeChild(gameOverTxt);
+            stage.removeChild(youWinTxt);
+            stage.removeChild(instructionsTxt);
+            var angle = [30, 60, 210, 240][Math.random() * 4 | 0];
+            var rad = angle * Math.PI / 180.0;
+            var ball = balls[0];
+            ball.dir = { x: Math.cos(rad), y: Math.sin(rad) };
+        }
+
+        if (game_state === 1 && effects.shoot && shoot_time > 1) {
+            shoot_time = 0;
+            createBullet();
+        }
+
+        if (!pressedKeys[keys.a] && !pressedKeys[keys.d]) {
+            bat_acc = bat_acc * 0.8;
+            if (Math.abs(bat_acc) < 0.01)
+                bat_acc = 0;
+        }
+
+        bat.x = bat.x + bat_speed * dt * bat_acc;
+
+        if (bat.x < bat_size * bat.scaleX / 2) {
+            bat.x = bat_size * bat.scaleX / 2;
+        }
+
+        if (bat.x > w - bat_size * bat.scaleX / 2) {
+            bat.x = w - bat_size * bat.scaleX / 2;
+        }
+
+        if (balls.length && !balls[0].dir) {
+            balls[0].x = bat.x;
+        }
+
+        if (game_state === 1) {
+            updateBalls();
+
+            updateBonuses();
+
+            updateBullets();
+
+            checkBonusCollision();
+
+            if (balls.length === 0) {
+                gameOver();
+            }
+
+            if (bricks.length === 0) {
+                youWin();
+            }
+        }
+
+        stage.update(event);
+    }
+
+    function createBallTouchPoints() {
+        var dirs = [[-1, 1], [-1, -1], [1, -1], [-1, -1], [-1, 1], [-1, -1], [1, -1], [-1, -1]];
+        var angleRad = 360 / dirs.length * deg2rad;
+        var touchPoints = [];
+        for (var i = 0; i < dirs.length; i++) {
+            var x = u / 2 * Math.cos(angleRad * i);
+            var y = u / 2 * Math.sin(angleRad * i);
+            touchPoints.push({ x, y, dir: { x: dirs[i][0], y: dirs[i][1] } });
+        }
+        return touchPoints;
+    }
+
+    function checkBatCollision({ x, y }) {
+        var sz = bat_size * bat.scaleX / 2;
+        if (bat.x - sz < x && x < bat.x + sz) {
+            if (bat.y <= y && y <= bat.y + u / 2) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function updateBalls() {
+        for (var ball of balls) {
+            if (ball.dir) {
+                ball.x += ball.dir.x * dt * ball_speed;
+                ball.y += ball.dir.y * dt * ball_speed;
+
+                if (ball.y > h) {
+                    ball.deleted = true;
+                    stage.removeChild(ball);
+                }
+
+                if (ball.x < u / 2) {
+                    ball.x = u / 2;
+                    changeHorizDir(ball);
+                }
+
+                if (ball.x > w - u / 2) {
+                    ball.x = w - u / 2;
+                    changeHorizDir(ball);
+                }
+
+                if (ball.y < u / 2) {
+                    ball.y = u / 2;
+                    changeVertDir(ball);
+                }
+
+                var touch = { x: ball.x + u / 2 * ball.dir.x, y: ball.y + u / 2 * ball.dir.y };
+
+                if (checkBatCollision(touch)) {
+                    changeVertDir(ball);
+                }
+
+                updateBricks(ball);
+            }
+        }
+
+        balls = balls.filter(x => !x.deleted);
+    }
+
+    function changeVertDir(obj) {
+        obj.dir.y *= -1;
+    }
+
+    function changeHorizDir(obj) {
+        obj.dir.x *= -1;
+    }
+
+    function checkBonusCollision() {
+        bonuses = bonuses.filter(x => !x.deleted);
+        for (var bonus of bonuses) {
+            var touch = { x: bonus.container.x + bonus.touch.x, y: bonus.container.y + bonus.touch.y };
+            if (checkBatCollision(touch)) {
+                bonus.deleted = true;
+                stage.removeChild(bonus.container);
+                switch (bonus.type) {
+                    case 'M':
+                        var ball = balls.map(x => x).sort((a, b) => a.y - b.y)[0];
+                        createBall(ball.x, ball.y, getRandomDir());
+                        createBall(ball.x, ball.y, getRandomDir());
+                        break;
+                    case 'G':// grow
+                        createjs.Tween.get(bat).to({ scaleX: bat.scaleX * 1.2 }, 1000);
+                        break;
+                    case 'S':// shrink
+                        createjs.Tween.get(bat).to({ scaleX: bat.scaleX * 0.8 }, 1000);
+                        break;
+                    case 'P':// penetration
+                        effects.penetrate = true;
+                        break;
+                    case 'B': // bullets
+                        effects.shoot = true;
+                        break;
+                }
+            }
+        }
+    }
+
+    function updateBullets() {
+        bullets = bullets.filter(x => !x.deleted);
+        for (var bullet of bullets) {
+            if (updateBricksByAmmo(bullet)) {
+                bullet.deleted = true;
+                stage.removeChild(bullet);
+            }
+        }
+    }
+
+    function updateBricks(ball) {
+        bricks = bricks.filter(x => !x.deleted);
+        for (var touch of ball_touch_points) {
+            var x = (ball.x + touch.x) / grid_size | 0;
+            var y = (ball.y + touch.y) / grid_size | 0;
+            var brick = getValue(bricks_map, x, y);
+            if (brick) {
+                delete bricks_map[x][y];
+                createBonus(brick.x, brick.y);
+
+                brick.deleted = true;
+                stage.removeChild(brick);
+
+                if (effects.penetrate)
+                    return;
+
+                ball.dir.x *= touch.dir.x;
+                ball.dir.y *= touch.dir.y;
+                return;
+            }
+        }
+    }
+
+    function updateBricksByAmmo(ammo) {
+        bricks = bricks.filter(x => !x.deleted);
+        for (var touch of ball_touch_points) {
+            var x = (ammo.x + touch.x) / grid_size | 0;
+            var y = (ammo.y + touch.y) / grid_size | 0;
+            var brick = getValue(bricks_map, x, y);
+            if (brick) {
+                delete bricks_map[x][y];
+                createBonus(brick.x, brick.y);
+
+                brick.deleted = true;
+                stage.removeChild(brick);
+
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function updateBonuses() {
+        var i = 0;
+        for (var bonus of bonuses) {
+            bonus.container.y += 2;
+            if (bonus.container.y > h) {
+                bonuses.splice(i, 1);
+                stage.removeChild(bonus.container);
+            }
+            i += 1;
+        }
+    }
+
+    function createBonus(x, y) {
+        if (Math.random() > 0.3) {
+            return;
+        }
+
+        var types = ['M', 'G', 'S', 'P', 'B'];
+        var type = types[Math.random() * types.length | 0];
+
+        var container = bonus_shapes[type];
+
+        if (container) {
+            container = container.clone(true);
+        } else {
+            bonus_shapes[type] = container = new createjs.Container();
+            container.tickChildren = false;
+            container.tickEnabled = false;
+
+            var shape = new createjs.Shape();
+            shape.graphics.beginFill("orange").drawCircle(0, 0, u / 2);
+
+            var text = new createjs.Text(type, "20px Arial", "black");
+            text.textAlign = 'center';
+            text.y = -10;
+
+            container.addChild(shape, text);
+
+            container.cache(-u / 2, -u / 2, u, u);
+        }
+
+        container.x = x;
+        container.y = y;
+
+        stage.addChild(container);
+
+        var bonus = { type, container, touch: { x: 0, y: u / 2 } };
+
+        bonuses.push(bonus);
+    }
+</script>
